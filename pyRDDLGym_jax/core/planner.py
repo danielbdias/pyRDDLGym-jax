@@ -415,7 +415,8 @@ class JaxStraightLinePlan(JaxPlan):
                  wrap_non_bool: bool=False,
                  wrap_softmax: bool=False,
                  use_new_projection: bool=False,
-                 max_constraint_iter: int=100) -> None:
+                 max_constraint_iter: int=100,
+                 initializer_per_action: Dict[str, initializers.Initializer]=dict()) -> None:
         '''Creates a new straight line plan in JAX.
         
         :param initializer: a Jax Initializer for setting the initial actions
@@ -435,10 +436,12 @@ class JaxStraightLinePlan(JaxPlan):
         :param max_constraint_iter: max iterations of projected 
         gradient for ensuring actions satisfy constraints, only required if 
         use_new_projection = True
+        :param initializer_per_action: Initializer function for each plan action
         '''
         super(JaxStraightLinePlan, self).__init__()
         
         self._initializer_base = initializer
+        self._initializer_per_action = initializer_per_action
         self._initializer = initializer
         self._wrap_sigmoid = wrap_sigmoid
         self._min_action_prob = min_action_prob
@@ -742,6 +745,7 @@ class JaxStraightLinePlan(JaxPlan):
         # ***********************************************************************
         
         init = self._initializer
+        initializer_per_action = self._initializer_per_action
         stack_bool_params = use_constraint_satisfaction and self._wrap_softmax
         
         def _jax_wrapped_slp_init(key, hyperparams, subs):
@@ -749,10 +753,16 @@ class JaxStraightLinePlan(JaxPlan):
             for (var, shape) in shapes.items():
                 if ranges[var] != 'bool' or not stack_bool_params: 
                     key, subkey = random.split(key)
-                    param = init(key=subkey, shape=shape, dtype=compiled.REAL)
+
+                    init_function = init
+                    if var in initializer_per_action.keys():
+                        init_function = initializer_per_action[var]
+
+                    param = init_function(key=subkey, shape=shape, dtype=compiled.REAL)
                     if ranges[var] == 'bool':
                         param += bool_threshold
                     params[var] = param
+                    
             if stack_bool_params:
                 key, subkey = random.split(key)
                 bool_shape = (horizon, bool_action_count)
@@ -1637,9 +1647,13 @@ class JaxBackpropPlanner:
         window of the past test_rolling_window returns when updating the best
         parameters found so far
         :param tqdm_position: position of tqdm progress bar (for multiprocessing)
+        :param epsilon_error: defines an error threshold where the optimization should stop
+        :param epsilon_iteration_stop: defines for how many iterations should be below of epsilon to stop
         '''
         it = self.optimize_generator(*args, **kwargs)
-        
+        if args['return_callback']:
+            return it
+
         # if the python is C-compiled then the deque is native C and much faster
         # than naively exhausting iterator, but not if the python is some other
         # version (e.g. PyPi); for details, see
@@ -1666,8 +1680,10 @@ class JaxBackpropPlanner:
                            print_summary: bool=True,
                            print_progress: bool=True,
                            test_rolling_window: int=10,
-                           tqdm_position: Optional[int]=None) -> Generator[Dict[str, Any], None, None]:
-        '''Returns a generator for computing an optimal policy or plan. 
+                           tqdm_position: Optional[int]=None,
+                           epsilon_error: float=None,
+                           epsilon_iteration_stop: int=1) -> Generator[Dict[str, object], None, None]:
+        '''Returns a generator for computing an optimal straight-line plan. 
         Generator can be iterated over to lazily optimize the plan, yielding
         a dictionary of intermediate computations.
         
@@ -1690,6 +1706,8 @@ class JaxBackpropPlanner:
         window of the past test_rolling_window returns when updating the best
         parameters found so far
         :param tqdm_position: position of tqdm progress bar (for multiprocessing)
+        :param epsilon_error: defines an error threshold where the optimization should stop
+        :param epsilon_iteration_stop: defines for how many iterations should be below of epsilon to stop
         '''
         start_time = time.time()
         elapsed_outside_loop = 0
@@ -1778,6 +1796,7 @@ class JaxBackpropPlanner:
         # initialize running statistics
         best_params, best_loss, best_grad = policy_params, jnp.inf, jnp.inf
         last_iter_improve = 0
+        best_loss_history = []
         rolling_test_loss = RollingMean(test_rolling_window)
         log = {}
         status = JaxPlannerStatus.NORMAL
@@ -1849,6 +1868,17 @@ class JaxBackpropPlanner:
                 returns = -np.sum(np.asarray(log['reward']), axis=1)
                 plot.redraw(xticks, loss_values, action_values, returns)
             
+            # stop criteria
+            if epsilon_error is not None:
+                best_loss_history.append(best_loss)
+
+                if len(best_loss_history) >= epsilon_iteration_stop:
+                    last_best_losses = best_loss_history[-epsilon_iteration_stop:]
+                    epsilons = [ np.abs(last_best_losses[index] - last_best_losses[index-1]) for index in range(1, len(last_best_losses)) ]
+                    stop_evaluation = list(map(lambda e : e < epsilon_error, epsilons))
+                    
+                    if np.all(stop_evaluation):
+                        break # stop the optimizer
             # if the progress bar is used
             elapsed = time.time() - start_time - elapsed_outside_loop
             if print_progress:
