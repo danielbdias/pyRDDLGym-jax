@@ -1651,6 +1651,8 @@ class JaxBackpropPlanner:
         :param tqdm_position: position of tqdm progress bar (for multiprocessing)
         :param epsilon_error: defines an error threshold where the optimization should stop
         :param epsilon_iteration_stop: defines for how many iterations should be below of epsilon to stop
+        :param record_training_batches: defines if it should return the values sampled for each state variable for 
+        the training batch
         '''
         it = self.optimize_generator(*args, **kwargs)
         if args['return_callback']:
@@ -1684,7 +1686,8 @@ class JaxBackpropPlanner:
                            test_rolling_window: int=10,
                            tqdm_position: Optional[int]=None,
                            epsilon_error: float=None,
-                           epsilon_iteration_stop: int=1) -> Generator[Dict[str, object], None, None]:
+                           epsilon_iteration_stop: int=1,
+                           record_training_batches: bool=False) -> Generator[Dict[str, object], None, None]:
         '''Returns a generator for computing an optimal straight-line plan. 
         Generator can be iterated over to lazily optimize the plan, yielding
         a dictionary of intermediate computations.
@@ -1812,7 +1815,8 @@ class JaxBackpropPlanner:
         
         for it in iters:
             status = JaxPlannerStatus.NORMAL
-            
+            training_batches = {}
+
             # update the parameters of the plan
             key, subkey = random.split(key)
             policy_params, converged, opt_state, opt_aux, \
@@ -1861,6 +1865,10 @@ class JaxBackpropPlanner:
                 returns = -np.sum(np.asarray(log['reward']), axis=1)
                 plot.redraw(xticks, loss_values, action_values, returns)
             
+            # record values of state variables if needed
+            if record_training_batches:
+                training_batches = self._record_state_variable_values(train_subs)
+
             # stop criteria
             if epsilon_error is not None:
                 best_loss_history.append(best_loss)
@@ -1903,6 +1911,7 @@ class JaxBackpropPlanner:
                 'updates': train_log['updates'],
                 'elapsed_time': elapsed,
                 'key': key,
+                'training_batches': training_batches,
                 **log
             }
             elapsed_outside_loop += (time.time() - start_time_outside)
@@ -1941,6 +1950,20 @@ class JaxBackpropPlanner:
                   f'    best_grad_norm={grad_norm}\n'
                   f'    diagnosis: {diagnosis}\n')
     
+    def _record_state_variable_values(self, train_subs):
+        training_batches = {}
+
+        # TODO: improve this code in future
+        for fluent in self.rddl.state_fluents.keys():
+            for value in train_subs[fluent]:
+                for ground_var, ground_value in self.rddl.ground_var_with_values(fluent, value):
+                    if ground_var not in training_batches.keys():
+                        training_batches[ground_var] = []
+
+                    training_batches[ground_var].append(ground_value.T)
+        
+        return training_batches
+
     def _perform_diagnosis(self, last_iter_improve, 
                            train_return, test_return, best_return, grad_norm):
         max_grad_norm = max(jax.tree_util.tree_leaves(grad_norm))
