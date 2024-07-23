@@ -1,6 +1,6 @@
 from functools import partial
 import traceback
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set
 
 import jax
 import jax.numpy as jnp
@@ -232,7 +232,8 @@ class JaxRDDLCompiler:
                  allow_synchronous_state: bool=True,
                  logger: Optional[Logger]=None,
                  use64bit: bool=False,
-                 compile_non_fluent_exact: bool=True) -> None:
+                 compile_non_fluent_exact: bool=True,
+                 ground_fluents_to_freeze: Set[str] = None) -> None:
         '''Creates a new RDDL to Jax compiler.
         
         :param rddl: the RDDL model to compile into Jax
@@ -276,6 +277,9 @@ class JaxRDDLCompiler:
         tracer = RDDLObjectsTracer(rddl, cpf_levels=self.levels)
         self.traced = tracer.trace()
         
+        # keep set of fluents that will be frozen on the transition
+        self.ground_fluents_to_freeze = ground_fluents_to_freeze
+
         # extract the box constraints on actions
         simulator = RDDLSimulatorPrecompiled(
             rddl=self.rddl,
@@ -511,6 +515,8 @@ class JaxRDDLCompiler:
             reward, key, err = reward_fn(subs, model_params, key)
             errors |= err
             
+            # TODO(daniel): freeze ground fluents here, checking self.ground_fluents_to_freeze
+
             # calculate fluent values
             fluents = {name: values for (name, values) in subs.items() 
                        if name not in rddl.non_fluents}

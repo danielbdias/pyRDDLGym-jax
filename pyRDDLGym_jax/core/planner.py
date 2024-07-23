@@ -1232,6 +1232,7 @@ class JaxBackpropPlanner:
                  utility: Union[Callable[[jnp.ndarray], float], str]='mean',
                  utility_kwargs: Optional[Kwargs]=None,
                  cpfs_without_grad: Optional[Set[str]]=None,
+                 ground_fluents_to_freeze: Optional[Set[str]]=None,
                  compile_non_fluent_exact: bool=True,
                  logger: Optional[Logger]=None) -> None:
         '''Creates a new gradient-based algorithm for optimizing action sequences
@@ -1287,7 +1288,8 @@ class JaxBackpropPlanner:
             optimizer_kwargs = {'learning_rate': 0.1}
         self._optimizer_kwargs = optimizer_kwargs
         self.clip_grad = clip_grad
-        
+        self.ground_fluents_to_freeze = ground_fluents_to_freeze
+
         # set optimizer
         try:
             optimizer = optax.inject_hyperparams(optimizer)(**optimizer_kwargs)
@@ -1403,14 +1405,18 @@ class JaxBackpropPlanner:
             logger=self.logger,
             use64bit=self.use64bit,
             cpfs_without_grad=self.cpfs_without_grad,
-            compile_non_fluent_exact=self.compile_non_fluent_exact)
+            compile_non_fluent_exact=self.compile_non_fluent_exact,
+            ground_fluents_to_freeze=self.ground_fluents_to_freeze
+        )
         self.compiled.compile(log_jax_expr=True, heading='RELAXED MODEL')
         
         # Jax compilation of the exact RDDL for testing
         self.test_compiled = JaxRDDLCompiler(
             rddl=rddl, 
             logger=self.logger,
-            use64bit=self.use64bit)
+            use64bit=self.use64bit,
+            ground_fluents_to_freeze=self.ground_fluents_to_freeze
+        )
         self.test_compiled.compile(log_jax_expr=True, heading='EXACT MODEL')
         
     def _jax_compile_optimizer(self):
