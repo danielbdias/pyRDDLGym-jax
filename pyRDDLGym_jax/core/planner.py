@@ -1653,7 +1653,7 @@ class JaxBackpropPlanner:
         the training batch
         '''
         it = self.optimize_generator(*args, **kwargs)
-        if args['return_callback']:
+        if kwargs['return_callback']:
             return it
 
         # if the python is C-compiled then the deque is native C and much faster
@@ -1685,7 +1685,8 @@ class JaxBackpropPlanner:
                            tqdm_position: Optional[int]=None,
                            epsilon_error: float=None,
                            epsilon_iteration_stop: int=1,
-                           record_training_batches: bool=False) -> Generator[Dict[str, object], None, None]:
+                           record_training_batches: bool=False,
+                           return_callback: bool=False) -> Generator[Dict[str, object], None, None]:
         '''Returns a generator for computing an optimal straight-line plan. 
         Generator can be iterated over to lazily optimize the plan, yielding
         a dictionary of intermediate computations.
