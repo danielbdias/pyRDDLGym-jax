@@ -39,7 +39,7 @@ try:
 except Exception:
     raise_warning('failed to import matplotlib: '
                   'plotting functionality will be disabled.', 'red')
-    traceback.print_exc()
+    # traceback.print_exc()
     plt = None
     
 Activation = Callable[[jnp.ndarray], jnp.ndarray]
