@@ -1906,6 +1906,7 @@ class JaxBackpropPlanner:
                     
                     if np.all(stop_evaluation):
                         break # stop the optimizer
+                    
             # if the progress bar is used
             elapsed = time.time() - start_time - elapsed_outside_loop
             if print_progress:
