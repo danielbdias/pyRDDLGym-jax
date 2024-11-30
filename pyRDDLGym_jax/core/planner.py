@@ -794,7 +794,8 @@ class JaxDeepReactivePolicy(JaxPlan):
                  normalize: bool=False,
                  normalize_per_layer: bool=False,
                  normalizer_kwargs: Optional[Kwargs]=None,
-                 wrap_non_bool: bool=False) -> None:
+                 wrap_non_bool: bool=False,
+                 initializer_per_layer: Dict[str, hk.initializers.Initializer]=None) -> None:
         '''Creates a new deep reactive policy in JAX.
         
         :param neurons: sequence consisting of the number of neurons in each
@@ -808,6 +809,7 @@ class JaxDeepReactivePolicy(JaxPlan):
         to layer norm
         :param wrap_non_bool: whether to wrap real or int action fluent parameters
         with non-linearity (e.g. sigmoid or ELU) to satisfy box constraints
+        :param initializer_per_layer: weight initialization per layer
         '''
         super(JaxDeepReactivePolicy, self).__init__()
         
@@ -823,6 +825,7 @@ class JaxDeepReactivePolicy(JaxPlan):
             normalizer_kwargs = {'create_offset': True, 'create_scale': True}
         self._normalizer_kwargs = normalizer_kwargs
         self._wrap_non_bool = wrap_non_bool
+        self._initializer_per_layer = initializer_per_layer
     
     def __str__(self) -> str:
         bounds = '\n        '.join(
@@ -875,6 +878,7 @@ class JaxDeepReactivePolicy(JaxPlan):
         layer_sizes = {var: np.prod(shape, dtype=int) 
                        for (var, shape) in shapes.items()}
         layer_names = {var: f'output_{var}'.replace('-', '_') for var in shapes}
+        initializer_per_layer = self._initializer_per_layer
         
         # inputs for the policy network
         if rddl.observ_fluents:
@@ -941,13 +945,27 @@ class JaxDeepReactivePolicy(JaxPlan):
             # feed state vector through hidden layers
             hidden = state
             for (i, (num_neuron, activation)) in layers:
-                linear = hk.Linear(num_neuron, name=f'hidden_{i}', w_init=init)
+                b_layer_init = None
+                w_layer_init = init
+                layer_name = f'hidden_{i}'
+
+                if initializer_per_layer is not None and layer_name in initializer_per_layer.keys():
+                    b_layer_init = hk.initializers.Constant(initializer_per_layer[layer_name]['b'])
+                    w_layer_init = hk.initializers.Constant(initializer_per_layer[layer_name]['w'])
+
+                linear = hk.Linear(num_neuron, name=layer_name, w_init=w_layer_init, b_init=b_layer_init)
                 hidden = activation(linear(hidden))
             
             # each output is a linear layer reshaped to original lifted shape
             actions = {}
             for (var, size) in layer_sizes.items():
-                linear = hk.Linear(size, name=layer_names[var], w_init=init)
+                b_layer_init = None
+                w_layer_init = init
+                if initializer_per_layer is not None and layer_names[var] in initializer_per_layer.keys():
+                    b_layer_init = hk.initializers.Constant(initializer_per_layer[layer_names[var]]['b'])
+                    w_layer_init = hk.initializers.Constant(initializer_per_layer[layer_names[var]]['w'])
+
+                linear = hk.Linear(size, name=layer_names[var], w_init=w_layer_init, b_init=b_layer_init)
                 reshape = hk.Reshape(output_shape=shapes[var], preserve_dims=-1,
                                      name=f'reshape_{layer_names[var]}')
                 output = reshape(linear(hidden))
